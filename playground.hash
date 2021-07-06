@@ -1,32 +1,11 @@
-Drop := mod {
-    drop: (Self) => void;
-};
-
-Conv := mod {
-    conv: (Self) => T;
-};
-
-Iterator := mod {
-    Item: type;
-    next: (&Self) => Option(Item);
-};
-
-Iterator += mod {
-    map := (self: Self, f: (Self.Item) => (infer _: type)): Map(Self, typeof(f)) => {
-        Map(self, f)
-    }
-};
-
-Map := (I: type, F: type) => struct(iter: I, f: F);
-
-Map(infer I: Iterator, infer F: type((I.Item) => (infer B: type))) += Iterator + mod {
-    Item = B;
-    next := (self: &Self) => self.iter.next().map(self.f);
-};
-
+// Malloc
 
 malloc := unsafe (bytes: usize): &raw u8 => {
     #intrinsic_malloc(bytes)
+};
+
+free := unsafe (ptr: &raw (infer _: type)): void => {
+    #intrinsic_free(transmute(ptr, &raw u8));
 };
 
 alloc_raw := (data: (infer T: type)): &raw T => {
@@ -41,6 +20,8 @@ main := () => {
     dog = Dog("Bob", 32).alloc_raw();
     assert_eq(type_of(dog), &raw Dog);
 }
+
+// Vector
 
 Zero := mod {
     zero: Self;
@@ -135,21 +116,7 @@ main := () => {
 };
 
 
-Option(
-    infer T: type(Add(infer U) { Output = infer O; })
-) += Add(Option(U)) {
-
-    Output = Option(O);
-
-    add = (self, rhs) => {
-        match (self, rhs) {
-            (Some(a), Some(b)) => Some(a + b),
-            _ => None,
-        }
-    };
-};
-
-
+// Option
 
 Option := (T: type) => enum(Some(data: T), None);
 
@@ -176,91 +143,52 @@ Option(infer T: type) ~= mod {
     };
 };
 
-
-
-Result := (T: type, E: type) => enum(Ok(data T), Err(error: E));
-
-
-
-main ~= () => {
-
-};
-
-Map ~= (
-    B: type,
-    I: Iterator(I),
-    F: (Iterator(I).Item) => B
-) => mod {
-
-};
-
-
-
-
-Map := mod {
-
-};
-
-
-
+// Rc
 
 RcBlock := struct(
     data: &raw u8,
     refs: usize,
 );
 
-Rc := (T: Conv(T, int)) => struct(
+Rc := (T: type) => struct(
     block: &raw RcBlock,
     ref: &raw T,
 );
 
-Rc.new := unsafe (data: (infer T: type)) => Rc(T) {
-    data_mem := malloc(T);
-    *data_mem = data;
+Rc(infer T: ..) ~= mod {
+    new := (data: T): Self => {
+        data_mem := data.alloc_raw();
+        block := RcBlock(data = data_mem, refs = 1).alloc_raw();
 
-    block := malloc(RcBlock);
-    *block.data = data_mem;
-    *block.refs = 1;
+        Self(block, ref = data_mem)
+    };
 
-    Rc(T)(block, ref = data_mem)
-};
+    clone := unsafe (rc: Self, ref: &raw (infer U: type)) => Rc(U) {
+        rc.block.refs += 1;
 
-Rc.clone := unsafe (U: type, rc: Rc(infer T: type(impl From(infer S: type))), ref: &raw U) => Rc(U) {
-    rc.block.refs += 1;
+        Rc(U)(block = rc.block, ref)
+    };
 
-    Rc(U)(block = rc.block, ref)
-};
-
-Conv, T, (
-    conv := (self) => #intrinsic_conv_str_int(self);
-);
-
-Conv(str) := (T: type) => (
-
-);
-
-Drop(Rc) := (
-    drop := unsafe (rc: Rc(infer T)) => {
+    drop := unsafe (rc: Self) => {
         rc.block.refs -= 1;
         if rc.block.refs == 0 {
             free(rc.block.data);
             free(rc.block);
         }
     };
-);
+};
 
 Dog := struct(name: str, age: int);
 
 main := unsafe () => {
     my_rc := Rc.new(Dog(name = "bob", age = 3)); // of type Rc(Dog)
+    defer my_rc.drop();
 
-    defer drop_rc(my_rc);
+    dog_name := my_rc.clone(&raw my_rc.ref.name) // of type Rc(str)
+    defer dog_name.drop();
 
-    dog_name := acquire_rc(str, my_rc, &raw my_rc.ref.name) // of type Rc(str)
-    defer drop_rc(dog_name);
-
-    dog_age := acquire_rc(int, my_rc, &raw my_rc.ref.age) // of type Rc(int)
-    defer drop_rc(dog_age);
+    dog_age := my_rc.clone(&raw my_rc.ref.age) // of type Rc(int)
+    defer dog_age.drop();
 
     // But all RCs are pointing to the same data chunk.
 };
