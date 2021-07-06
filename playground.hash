@@ -1,0 +1,266 @@
+Drop := mod {
+    drop: (Self) => void;
+};
+
+Conv := mod {
+    conv: (Self) => T;
+};
+
+Iterator := mod {
+    Item: type;
+    next: (&Self) => Option(Item);
+};
+
+Iterator += mod {
+    map := (self: Self, f: (Self.Item) => (infer _: type)): Map(Self, typeof(f)) => {
+        Map(self, f)
+    }
+};
+
+Map := (I: type, F: type) => struct(iter: I, f: F);
+
+Map(infer I: Iterator, infer F: type((I.Item) => (infer B: type))) += Iterator + mod {
+    Item = B;
+    next := (self: &Self) => self.iter.next().map(self.f);
+};
+
+
+malloc := unsafe (bytes: usize): &raw u8 => {
+    #intrinsic_malloc(bytes)
+};
+
+alloc_raw := (data: (infer T: type)): &raw T => {
+    ptr := unsafe { malloc(T.type_size()) };
+    unsafe { *ptr = data; }
+    ptr
+};
+
+Dog := struct(name: str, age: int);
+
+main := () => {
+    dog = Dog("Bob", 32).alloc_raw();
+    assert_eq(type_of(dog), &raw Dog);
+}
+
+Zero := mod {
+    zero: Self;
+};
+
+One := mod {
+    one: Self;
+};
+
+Add := (Rhs: type) => mod {
+    Output: type,
+    add: (Self, Rhs) => Output,
+};
+
+Mul := (Rhs: type) => mod {
+    Output: type,
+    mul: (Self, Rhs) => Output,
+};
+
+Group := Add(Rhs = Self) { Output = Self };
+
+Field := Mul(Rhs = Self) { Output = Self } ~ Add(Rhs = Self) { Output = Self } ~ mod {};
+
+Vector := (T: type, N: const usize) => struct(data: [T; N]);
+
+Vector(infer T: .., infer N: ..) ~= mod {
+    new := (...args: [T; N]) => Self(args);
+};
+
+Vector(infer T: type(Eq(infer U)), infer N: ..) ~= Eq(Vector(U)) {
+    eq = (a, b) => {
+        self.data.iter().zip(other.data.iter()).map(((x, y)) => x == y).reduce(true, T.Eq(U).eq);
+    };
+};
+
+Vector(infer T: type(Conv(str)), infer N: ..) ~= Conv(str) {
+    conv = (self) => {
+        elements := self.data
+            .iter()
+            .sized()
+            .map(((s, x)) => conv(x) + if s.last() { "" } else { ", " })
+            .sum();
+
+        "[" + elements + "]"
+    };
+};
+
+Vector(infer T: type(Zero), infer N: ..) ~= Zero {
+    zero = Self(data = [T.Zero.zero; N]);
+};
+
+Vector(infer T: type(One), infer N: ..) ~= One {
+    one = Self(data = [T.One.one; N]);
+};
+
+Vector(infer T: type(Group), infer N: ..) ~= Group {
+    add = (a, b) => Self(
+        data = a.data
+                .iter()
+                .zip(b.data.iter())
+                .map(((x, y)) => x + y)
+                .collect()
+    );
+};
+
+Vector(infer T: type(Field), infer N: ..) ~= mod {
+    dot := (a: Self, b: Self): T => a.data.zip(b.data).map(((a, b)) => a * b).sum();
+};
+
+Vector(infer T: type(Field), N = 3) ~= mod {
+    cross := (a: Self, b: Self): Self => {
+        Self(data = [
+            a.data[2] * b.data[3] - a.data[3] * b.data[2], 
+            a.data[3] * b.data[1] - a.data[1] * b.data[3], 
+            a.data[1] * b.data[2] - a.data[2] * b.data[1], 
+        ])
+    };
+};
+
+main := () => {
+    V3 := Vector(f32, 3);
+
+    a := V3.new(1, 2, 3);
+    b := V3.new(7, 4, 1);
+    c := a.dot(b).cross(a - c) + b;
+
+    if a == c {
+        print("equal!");
+    }
+
+    print(conv(c));
+};
+
+
+Option(
+    infer T: type(Add(infer U) { Output = infer O; })
+) += Add(Option(U)) {
+
+    Output = Option(O);
+
+    add = (self, rhs) => {
+        match (self, rhs) {
+            (Some(a), Some(b)) => Some(a + b),
+            _ => None,
+        }
+    };
+};
+
+
+
+Option := (T: type) => enum(Some(data: T), None);
+
+Option(infer T: type) ~= mod {
+    is_some := (self: Self) => bool {
+        match self {
+            Some(_) => true,
+            None => false,
+        }
+    };
+
+    is_none := (self: Self) => bool {
+        match self {
+            Some(_) => false,
+            None => true,
+        }
+    };
+
+    unwrap := (self: Self) => T {
+        match self {
+            Some(data) => data,
+            None => panic("Tried to unwrap an Option(" + type_name(T) + ").None"),
+        }
+    };
+};
+
+
+
+Result := (T: type, E: type) => enum(Ok(data T), Err(error: E));
+
+
+
+main ~= () => {
+
+};
+
+Map ~= (
+    B: type,
+    I: Iterator(I),
+    F: (Iterator(I).Item) => B
+) => mod {
+
+};
+
+
+
+
+Map := mod {
+
+};
+
+
+
+
+RcBlock := struct(
+    data: &raw u8,
+    refs: usize,
+);
+
+Rc := (T: Conv(T, int)) => struct(
+    block: &raw RcBlock,
+    ref: &raw T,
+);
+
+Rc.new := unsafe (data: (infer T: type)) => Rc(T) {
+    data_mem := malloc(T);
+    *data_mem = data;
+
+    block := malloc(RcBlock);
+    *block.data = data_mem;
+    *block.refs = 1;
+
+    Rc(T)(block, ref = data_mem)
+};
+
+Rc.clone := unsafe (U: type, rc: Rc(infer T: type(impl From(infer S: type))), ref: &raw U) => Rc(U) {
+    rc.block.refs += 1;
+
+    Rc(U)(block = rc.block, ref)
+};
+
+Conv, T, (
+    conv := (self) => #intrinsic_conv_str_int(self);
+);
+
+Conv(str) := (T: type) => (
+
+);
+
+Drop(Rc) := (
+    drop := unsafe (rc: Rc(infer T)) => {
+        rc.block.refs -= 1;
+        if rc.block.refs == 0 {
+            free(rc.block.data);
+            free(rc.block);
+        }
+    };
+);
+
+Dog := struct(name: str, age: int);
+
+main := unsafe () => {
+    my_rc := Rc.new(Dog(name = "bob", age = 3)); // of type Rc(Dog)
+
+    defer drop_rc(my_rc);
+
+    dog_name := acquire_rc(str, my_rc, &raw my_rc.ref.name) // of type Rc(str)
+    defer drop_rc(dog_name);
+
+    dog_age := acquire_rc(int, my_rc, &raw my_rc.ref.age) // of type Rc(int)
+    defer drop_rc(dog_age);
+
+    // But all RCs are pointing to the same data chunk.
+};
