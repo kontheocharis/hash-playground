@@ -1,5 +1,8 @@
 // Malloc
 
+// Here we define some memory allocation primitives. Notice the usage of
+// "unsafe" to declare unsafe functions and blocks.
+
 malloc := unsafe (bytes: usize): &raw u8 => {
     #intrinsic_malloc(bytes)
 };
@@ -8,20 +11,66 @@ free := unsafe (ptr: &raw (infer _: type)): void => {
     #intrinsic_free(transmute(ptr, &raw u8));
 };
 
+// Here we type the argument "data" as "(infer T: type)". This means that
+// "data" has to be of some type T, whose type is "type". The usage of "infer"
+// means to figure out what "T" is from the "data" parameter. "T" can then be
+// used in the function parameters, return type, and body.
+
 alloc_raw := (data: (infer T: type)): &raw T => {
     ptr := unsafe { malloc(T.type_size()) };
     unsafe { *ptr = data; }
     ptr
 };
 
+// The symbol Dog is assigned to struct(..), which means that "Dog: type".
+// There is no distiction between different types of symbols; all symbols have
+// a type and a value, and this symbol has a type "type" and a value
+// "struct(name: str, age: int)".
+//
+// An important thing to note is that "struct(..)", "enum(..)", and "mod {
+// .. }" (see later), are *nominal*. This means that if two instantiations of
+// such constructs are structurally identical, they are nevertheless not
+// assignable to each other.
+
+// For example, if "F := struct(bar: int)" and "B := struct(bar: int)", it is
+// not possible to use a F value in the place of a B value, even though
+// structurally they are the same.
+
 Dog := struct(name: str, age: int);
 
 main := () => {
     dog = Dog("Bob", 32).alloc_raw();
     assert_eq(type_of(dog), &raw Dog);
-}
+};
 
 // Vector
+
+// Modules are created with "mod { .. }" and serve as nominal interfaces and/or
+// implementations.  They can be combined with structs or enums using the "~"
+// operator. More specifically, you can "struct(..) ~ mod { .. }", "enum(..) ~
+// mod { .. }", or "mod { .. } ~ mod { .. }".  You can do this in separate
+// declarations like:
+// 
+//  X := struct(...);
+//  X ~= mod { ... };
+// 
+// Equivalent to
+// 
+//  X := struct(...) ~ mod { ... };
+
+
+// If a symbol is assigned to a module, it is nominal, and cannot be used in
+// place of another module of the same shape. In other words, if
+//
+//   A := mod { foo: Bar },
+//
+// and
+//
+//   B := mod { foo: Bar },
+//
+// you cannot use something that implements A in place of a parameter that
+// expects B. This "nominality" reflects how structs and enums work as well
+// (two structs of the same shape are not assignable to each other).
 
 Zero := mod {
     zero: Self;
@@ -30,6 +79,10 @@ Zero := mod {
 One := mod {
     one: Self;
 };
+
+// Here we have a module that is returned by a type function. Once again, this
+// is nominal, however, the result of Add(T) for some T is *strictly
+// cached*. This means that Add(U) is always assignable to Add(T) if U = T.
 
 Add := (Rhs: type) => mod {
     Output: type,
@@ -41,15 +94,57 @@ Mul := (Rhs: type) => mod {
     mul: (Self, Rhs) => Output,
 };
 
+// Here we create an alias for the Add module with some given parameters.
+// First of all notice the syntax
+//
+//   <MOD> { <MOD_BODY> }.
+//
+// This means that Group is assignable to Add(Rhs = Self) { Output = Self } and
+// just serves as an alias. However, if the definition were to be
+//
+//   Group := mod {} ~ Add(Rhs = Self) { Output = Self };
+//
+// then Group wouldn't be an alias, but a nominal symbol, because it contains
+// its own empty "mod {}", which makes it non-assignable to anything other than
+// itself.
+
 Group := Add(Rhs = Self) { Output = Self };
 
-Field := Mul(Rhs = Self) { Output = Self } ~ Add(Rhs = Self) { Output = Self } ~ mod {};
+// Here we see an alias that combines two modules.
+
+Field := Mul(Rhs = Self) { Output = Self } ~ Add(Rhs = Self) { Output = Self };
 
 Vector := (T: type, N: const usize) => struct(data: [T; N]);
 
+// Vector is a type function, whose return type is "type".  Furthermore, type
+// functions are *strictly cached*, which means that Foo(T) always gives the
+// *same nominal type for some given T*.
+//
+// We can take advantage of this fact and introduce syntax to add modules to
+// the return type of a type function, conditional to the parameters of the
+// function.  For example, the next declaration adds a module to Vector(T, N),
+// for some inferred T and N. The bounds given to T and N are "..", which
+// stands for "copy the types from the function definition". Thus the types are
+// "T: type" and "N: const usize" as above. This means that this module is
+// defined in Vector(T, N) for any valid T and N.
+
 Vector(infer T: .., infer N: ..) ~= mod {
+    // Here we see the usage of varargs. Right now, varargs can be used to
+    // avoid having to specify an extra array literal to give the arguments
+    // (kind of like JavasScript). This can be extended to support tuple types,
+    // or even variadic tuple types, for differently typed and sized
+    // parameter lists.
     new := (...args: [T; N]) => Self(args);
 };
+
+// Here we have some more additions to Vector, this time conditional on the
+// fact that T in Vector(T, N) is a type which contains the nominal Eq(U)
+// module for some U that is to be inferred from usage.
+//
+// The module that is added to Vector(T, N) is a nominal Eq(Vector(U)) for the
+// same U as in the left hand side.  Notice that the function "eq" is already
+// declared in Eq(T) for any T, so we just need to define it here (use "="
+// rather than ":=").
 
 Vector(infer T: type(Eq(infer U)), infer N: ..) ~= Eq(Vector(U)) {
     eq = (a, b) => {
@@ -91,6 +186,9 @@ Vector(infer T: type(Field), infer N: ..) ~= mod {
     dot := (a: Self, b: Self): T => a.data.zip(b.data).map(((a, b)) => a * b).sum();
 };
 
+// Here we define another module on Vector(T, N) with the constraint that F is
+// a type that has the Field module, and N the specific usize value of 3.
+
 Vector(infer T: type(Field), N = 3) ~= mod {
     cross := (a: Self, b: Self): Self => {
         Self(data = [
@@ -102,13 +200,14 @@ Vector(infer T: type(Field), N = 3) ~= mod {
 };
 
 main := () => {
+    // Here we create a type alias.
     V3 := Vector(f32, 3);
 
     a := V3.new(1, 2, 3);
     b := V3.new(7, 4, 1);
-    c := a.dot(b).cross(a - c) + b;
+    c := (a.cross(a - c) + b).dot(b);
 
-    if a == c {
+    if a.dot(a) == c {
         print("equal!");
     }
 
